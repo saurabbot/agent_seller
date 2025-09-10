@@ -1,7 +1,13 @@
 import logging
-
+import numpy as np
+import os
+import urllib.request
 from dotenv import load_dotenv
-
+import cv2
+import asyncio
+from livekit import rtc
+from livekit.rtc import VideoFrame
+from livekit.rtc import VideoBufferType
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -28,48 +34,242 @@ logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
-AGENT_DISPLAY_NAME = "Jenna"
+AGENT_DISPLAY_NAME = "Suresh"
+TEST_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+VIDEO_PATH = "agents/data/BigBuckBunny.mp4"
 
 
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Jenna. You would interact with users via voice. with that in mind keep your responses concise and to the point. You are curious and friendly, and have a sense of humor.",
+            instructions="Your name is Suresh. You would interact with users via voice. with that in mind keep your responses concise and to the point. You are curious and friendly, and have a sense of humor. your job is to help the client find the right property and then share screen and play video of the property. ",
         )
-
+        self.room = None 
+        self.screen_share_source = None
+        self.video_playing = False
+        self.video_task = None
     async def on_enter(self):
-        # when the agent is added to the session, it'll generate a reply
-        # according to its instructions
-        self.session.generate_reply(instructions="Say something similar to 'Hey I'm Jenna, how can I help you today?'")
+        self.session.generate_reply(instructions="Hey I'm Suresh, your real estate agent. How can I help you today?")
+    # async def _play_video(self, video_path: str):
+    #     """Play video by feeding frames to screen share source"""
+    #     try:
+    #         # Open video file
+    #         cap = cv2.VideoCapture(video_path)
+    #         if not cap.isOpened():
+    #             logger.error(f"Could not open video file: {video_path}")
+    #             return False
 
-    # all functions annotated with @function_tool will be passed to the LLM when this
-    # agent is active
+    #         # Get video properties
+    #         fps = cap.get(cv2.CAP_PROP_FPS)
+    #         frame_delay = 1.0 / fps if fps > 0 else 1.0 / 30  # Default to 30fps if fps is invalid
+            
+    #         logger.info(f"Starting video playback at {fps} fps")
+            
+    #         frame_count = 0
+    #         while cap.isOpened() and self.video_playing:
+    #             ret, frame = cap.read()
+    #             if not ret:
+    #                 # End of video, loop back to beginning
+    #                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    #                 logger.info("Video ended, looping...")
+    #                 continue
+                
+    #             # Convert frame to ARGB format
+    #             argb_frame = self._frame_to_argb(frame)
+                
+    #             # Create RTCVideoFrame
+    #             video_frame = rtc.VideoFrame.create(
+    #                 width=1280,
+    #                 height=720,
+    #                 buffer=argb_frame.tobytes(),
+    #                 format=rtc.VideoBufferType.ARGB
+    #             )
+                
+    #             # Send frame to screen share source
+    #             if self.screen_share_source:
+    #                 self.screen_share_source.capture_frame(video_frame)
+                
+    #             frame_count += 1
+    #             if frame_count % 100 == 0:  # Log every 100 frames
+    #                 logger.debug(f"Played {frame_count} frames")
+                
+    #             # Wait for next frame timing
+    #             await asyncio.sleep(frame_delay)
+            
+    #         cap.release()
+    #         logger.info("Video playback stopped")
+    #         return True
+            
+    #     except Exception as e:
+    #         logger.error(f"Error during video playback: {e}")
+    #         return False
+    def _frame_to_argb(self, frame):
+        """Convert OpenCV frame (BGR) to ARGB format for LiveKit"""
+        # Resize frame to match screen share source resolution
+        frame_resized = cv2.resize(frame, (1280, 720))
+        
+        # Convert BGR to RGB
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        
+        # Add alpha channel (fully opaque)
+        height, width, _ = frame_rgb.shape
+        frame_argb = np.zeros((height, width, 4), dtype=np.uint8)
+        frame_argb[:, :, 1:4] = frame_rgb  # RGB goes to channels 1,2,3
+        frame_argb[:, :, 0] = 255  # Alpha channel (fully opaque)
+        
+        return frame_argb
+    
+    
+    # @function_tool
+    # async def share_property_video(self):
+    #     """Share a property video on screen"""
+    #     if self.room is None:
+    #         return "Room not available"
+            
+    #     try:
+            
+            
+    #         self.screen_share_source = rtc.VideoSource(800, 600)
+    #         track = rtc.LocalVideoTrack.create_video_track("property_video", self.screen_share_source)
+    #         await self.room.local_participant.publish_track(
+    #             track, 
+    #             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_SCREENSHARE)
+    #         )
+    #         asyncio.create_task(self._play_video(VIDEO_PATH))
+    #         return "Started sharing property video on screen"
+            
+    #     except Exception as e:
+    #         logger.error(f"Error sharing screen: {e}")
+    #         return f"Failed to share screen: {str(e)}"
+    # async def _play_video_file(self):
+    #     """Play video file and feed frames to VideoSource"""
+    #     VIDEO_PATH = "agents/data/BigBuckBunny.mp4"
+        
+    #     try:
+    #         # Open video file
+    #         cap = cv2.VideoCapture(VIDEO_PATH)
+            
+    #         if not cap.isOpened():
+    #             logger.error("Could not open video file")
+    #             return
+            
+    #         # Get video properties
+    #         fps = cap.get(cv2.CAP_PROP_FPS)
+    #         frame_time = 1.0 / fps  # Time between frames in seconds
+            
+    #         while cap.isOpened():
+    #             ret, frame = cap.read()
+                
+    #             if not ret:
+    #                 # Video ended, loop it or stop
+    #                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Loop video
+    #                 continue
+                
+    #             # Convert OpenCV frame (BGR) to RGB
+    #             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+    #             # Convert to PIL Image then to VideoFrame
+    #             pil_image = Image.fromarray(frame_rgb)
+                
+    #             # Create VideoFrame (you might need to adjust this based on LiveKit's VideoFrame format)
+    #             video_frame = rtc.VideoFrame.from_image(pil_image)
+                
+    #             # Capture frame to the video source
+    #             self.screen_share_source.capture_frame(video_frame)
+                
+    #             # Wait for next frame
+    #             await asyncio.sleep(frame_time)
+            
+    #         cap.release()
+            
+    #     except Exception as e:
+    #         logger.error(f"Error playing video: {e}")
+    def get_sample_video(self):
+        sample_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        local_path = "sample_video.mp4"
+
+        if not os.path.exists(local_path):
+            logger.info("Downloading sample video...")
+            urllib.request.urlretrieve(sample_url, local_path)
+            logger.info("Download complete.")
+        else:
+            logger.info("Sample video already exists locally.")
+
+        return os.path.abspath(local_path)
     @function_tool
-    async def lookup_weather(
-        self,
-        context: RunContext,
-        location: str,
-        latitude: str,
-        longitude: str,
-    ):
-        """Called when the user asks for weather related information.
-        Ensure the user's location (city or region) is provided.
-        When given a location, please estimate the latitude and longitude of the location and
-        do not ask the user for them.
+    async def share_property_video(self):
+        """Share a property video on screen"""
+        if self.room is None:
+            return "Room not available"
 
-        Args:
-            location: The location they are asking for
-            latitude: The latitude of the location
-            longitude: The longitude of the location
-        """
+        try:
+            self.screen_share_source = rtc.VideoSource(1280, 720)
+            track = rtc.LocalVideoTrack.create_video_track("property_video", self.screen_share_source)
+            await self.room.local_participant.publish_track(
+                track,
+                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_SCREENSHARE)
+            )
 
-        logger.info(f"Looking up weather for {location}")
+            video_path = self.get_sample_video()  # Get video automatically
+            self.video_playing = True
+            self.video_task = asyncio.create_task(self._play_video(video_path))
+            return "Started sharing property video on screen"
 
-        return {
-            "weather": "sunny",
-            "temperature": 70,
-            "location": location,
-        }
+        except Exception as e:
+            logger.error(f"Error sharing screen: {e}")
+            return f"Failed to share screen: {str(e)}"
+
+
+    async def _play_video(self, video_path: str):
+        try:
+            if not os.path.exists(video_path):
+                logger.error(f"Video file does not exist: {video_path}")
+                return False
+
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"Could not open video file: {video_path}")
+                return False
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_delay = 1.0 / fps if fps > 0 else 1.0 / 30
+            self.video_playing = True
+            logger.info(f"Starting video playback at {fps} fps")
+
+            while self.video_playing:
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Loop video
+                    continue
+
+                # Resize and convert to RGB
+                frame_resized = cv2.resize(frame, (1280, 720))
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+
+                # Convert to raw bytes
+                frame_bytes = frame_rgb.tobytes()
+
+                # Create VideoFrame object
+                video_frame = VideoFrame(
+                    width=1280,
+                    height=720,
+                    type=VideoBufferType.RGB24,  # instead of proto_video.VideoBufferType.RGB24
+                    data=frame_bytes
+                )
+                # Send frame to LiveKit
+                if self.screen_share_source:
+                    self.screen_share_source.capture_frame(video_frame)
+
+                await asyncio.sleep(frame_delay)
+
+            cap.release()
+            logger.info("Video playback stopped")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error playing video: {e}")
+            return False
+
 
 
 def prewarm(proc: JobProcess):
@@ -78,20 +278,19 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-
+    logger.info(f"Context: {ctx}")
+    logger.info(f"Room Beep Boop: {ctx.room}")
+    
+    
     session = AgentSession(
-        # llm=openai.realtime.RealtimeModel(),
 
         vad=ctx.proc.userdata["vad"],
-        # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="alloy"),
-        # use LiveKit's turn detection model
         turn_detection=EnglishModel(),
     )
 
-    # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -103,18 +302,17 @@ async def entrypoint(ctx: JobContext):
         summary = usage_collector.get_summary()
         logger.info(f"Usage: {summary}")
 
-    # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
 
-    # wait for a participant to join the room
     await ctx.wait_for_participant()
 
+    agent = MyAgent()
+    agent.room = ctx.room
+    
     await session.start(
-        agent=MyAgent(),
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
         ),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
@@ -130,6 +328,7 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             request_fnc=request_fnc,
-            agent_name="livekit-agent" # used to request the agent
+            agent_name="livekit-agent"
         )
     )
+
